@@ -1,20 +1,22 @@
 {
   "version": 2,
-  "name": "ai-task-manager",
-  "outputDirectory": "frontend",
   "builds": [
     {
-      "src": "frontend/**",
+      "src": "frontend/index.html",
       "use": "@vercel/static"
+    },
+    {
+      "src": "api/run.py",
+      "use": "@vercel/python"
     }
   ],
   "routes": [
     {
-      "src": "/(.*)",
-      "dest": "/frontend/$1"
+      "src": "/api/run",
+      "dest": "/api/run.py"
     },
     {
-      "src": "/",
+      "src": "/(.*)",
       "dest": "/frontend/index.html"
     }
   ]
