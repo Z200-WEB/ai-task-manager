@@ -52,9 +52,8 @@ function AgentCard({agent,status,output,index}){
 function App(){
   const[task,setTask]=useState('');const[loading,setLoading]=useState(false);
   const[agents,setAgents]=useState([]);const[result,setResult]=useState('');
-  const[error,setError]=useState('');const[showSet,setShowSet]=useState(false);
-  const[apiBase,setApiBase]=useState(localStorage.getItem('api_base')||'http://localhost:8000');
-  const[copied,setCopied]=useState(false);const abortRef=useRef(null);
+  const[error,setError]=useState('');const[copied,setCopied]=useState(false);
+  const abortRef=useRef(null);
   const ORDER=['Planner','Researcher','Writer','Reviewer'];
   const init=()=>ORDER.map(a=>({agent:a,status:'pending',output:''}));
   const submit=async()=>{
@@ -62,8 +61,8 @@ function App(){
     setLoading(true);setResult('');setError('');setAgents(init());
     const ctrl=new AbortController();abortRef.current=ctrl;
     try{
-      const res=await fetch(`${apiBase}/api/run`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task:task.trim()}),signal:ctrl.signal});
-      if(!res.ok)throw new Error(`API error ${res.status} — check Settings for backend URL`);
+      const res=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task:task.trim()}),signal:ctrl.signal});
+      if(!res.ok)throw new Error('API error '+res.status+': '+await res.text());
       const reader=res.body.getReader();const dec=new TextDecoder();let buf='';
       outer:while(true){
         const{done,value}=await reader.read();if(done)break;
@@ -96,7 +95,7 @@ function App(){
             <div style={{fontSize:11,color:'#6c63ff',fontWeight:500}}>Multi-Agent · Gemini · LangGraph</div>
           </div>
         </div>
-        <button onClick={()=>setShowSet(true)} style={{padding:'7px 10px',background:'transparent',border:'1px solid #2a2a3a',borderRadius:8,color:'#8888aa',cursor:'pointer',fontSize:16}} title="Settings">⚙️</button>
+        <a href="https://github.com/Z200-WEB/ai-task-manager" target="_blank" style={{padding:'7px 12px',background:'transparent',border:'1px solid #2a2a3a',borderRadius:8,color:'#8888aa',textDecoration:'none',fontSize:12}}>GitHub ↗</a>
       </header>
       <main style={{flex:1,maxWidth:800,width:'100%',margin:'0 auto',padding:'32px 20px',display:'flex',flexDirection:'column',gap:24}}>
         <div style={{textAlign:'center',paddingBottom:4}}>
@@ -145,22 +144,8 @@ function App(){
         )}
       </main>
       <footer style={{borderTop:'1px solid #1e1e2e',padding:'14px 24px',textAlign:'center',fontSize:12,color:'#555570'}}>
-        AI Task Manager · Gemini + LangGraph · <a href="https://github.com/Z200-WEB/ai-task-manager" target="_blank" style={{color:'#6c63ff',textDecoration:'none'}}>GitHub ↗</a>
+        AI Task Manager · Powered by Gemini 1.5 Flash + LangGraph
       </footer>
-      {showSet&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100}} onClick={()=>setShowSet(false)}>
-          <div style={{background:'#1a1a24',border:'1px solid #2a2a3a',borderRadius:16,padding:28,width:420,maxWidth:'90vw'}} onClick={e=>e.stopPropagation()}>
-            <h3 style={{marginBottom:16,fontSize:16,color:'#e2e2f0'}}>⚙️ Settings</h3>
-            <label style={{fontSize:12,color:'#8888aa',display:'block',marginBottom:6}}>Backend API URL</label>
-            <input value={apiBase} onChange={e=>setApiBase(e.target.value)} style={{width:'100%',background:'#0a0a0f',border:'1px solid #3a3a4a',borderRadius:8,padding:'10px 12px',color:'#e2e2f0',fontSize:14,outline:'none'}}/>
-            <p style={{fontSize:11,color:'#8888aa',marginTop:6}}>Change to your deployed backend URL (Railway, Render, etc.)</p>
-            <div style={{display:'flex',gap:10,marginTop:20,justifyContent:'flex-end'}}>
-              <button onClick={()=>setShowSet(false)} style={{padding:'8px 16px',background:'transparent',border:'1px solid #3a3a4a',borderRadius:8,color:'#8888aa',cursor:'pointer',fontSize:13}}>Cancel</button>
-              <button onClick={()=>{localStorage.setItem('api_base',apiBase);setShowSet(false);}} style={{padding:'8px 20px',background:'#6c63ff',border:'none',borderRadius:8,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600}}>Save</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
