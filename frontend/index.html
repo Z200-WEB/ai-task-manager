@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Task Manager</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root { --bg:#0a0a0f; --surface:#111118; --border:#2a2a3a; --accent:#6c63ff; --text:#e2e2f0; --muted:#8888aa; }
+    html,body { height:100%; font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); }
+    #root { height:100%; }
+    ::-webkit-scrollbar { width:6px; }
+    ::-webkit-scrollbar-track { background:#111118; }
+    ::-webkit-scrollbar-thumb { background:#2a2a3a; border-radius:3px; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    @keyframes pulse { 0%,100%{opacity:1;}50%{opacity:.4;} }
+    @keyframes fadeIn { from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);} }
+    @keyframes slideIn { from{opacity:0;transform:translateX(-12px);}to{opacity:1;transform:translateX(0);} }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const{useState,useRef}=React;
+const C={Planner:{color:'#6c63ff',bg:'rgba(108,99,255,0.12)',icon:'🗺️'},Researcher:{color:'#06b6d4',bg:'rgba(6,182,212,0.12)',icon:'🔍'},Writer:{color:'#f59e0b',bg:'rgba(245,158,11,0.12)',icon:'✍️'},Reviewer:{color:'#10b981',bg:'rgba(16,185,129,0.12)',icon:'✅'}};
+function AgentCard({agent,status,output,index}){
+  const[exp,setExp]=useState(false);
+  const c=C[agent]||{color:'#8888aa',bg:'rgba(136,136,170,0.1)',icon:'🤖'};
+  return(
+    <div style={{animation:`slideIn .35s ease ${index*.08}s both`,border:`1px solid ${status==='done'?c.color+'44':status==='running'?c.color+'88':'#2a2a3a'}`,borderRadius:12,background:status!=='pending'?c.bg:'transparent',overflow:'hidden',transition:'all .3s',boxShadow:status==='running'?`0 0 20px ${c.color}33`:'none'}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,padding:'14px 16px',cursor:output?'pointer':'default'}} onClick={()=>output&&setExp(e=>!e)}>
+        <div style={{fontSize:20,width:32,textAlign:'center'}}>{status==='running'?<span style={{display:'inline-block',animation:'spin 1s linear infinite'}}>⚙️</span>:c.icon}</div>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:600,fontSize:14,color:status!=='pending'?c.color:'#8888aa'}}>{agent}</div>
+          <div style={{fontSize:12,color:'#8888aa',marginTop:2}}>{status==='running'?<span style={{animation:'pulse 1.2s infinite'}}>Processing...</span>:status==='done'?'Completed ✓':'Waiting'}</div>
+        </div>
+        <div style={{display:'flex',alignItems:'center',gap:8}}>
+          {status==='running'&&<div style={{width:8,height:8,borderRadius:'50%',background:c.color,animation:'pulse 1s infinite'}}/>}
+          {status==='done'&&<div style={{width:8,height:8,borderRadius:'50%',background:'#10b981'}}/>}
+          {output&&<span style={{color:'#8888aa',fontSize:11,transform:exp?'rotate(180deg)':'none',transition:'transform .2s',display:'inline-block'}}>▼</span>}
+        </div>
+      </div>
+      {exp&&output&&<div style={{padding:'0 16px 14px',borderTop:`1px solid ${c.color}22`}}><pre style={{marginTop:10,fontSize:12.5,lineHeight:1.65,color:'#c8c8e8',whiteSpace:'pre-wrap',fontFamily:'inherit',maxHeight:260,overflowY:'auto'}}>{output}</pre></div>}
+    </div>
+  );
+}
+function App(){
+  const[task,setTask]=useState('');const[loading,setLoading]=useState(false);
+  const[agents,setAgents]=useState([]);const[result,setResult]=useState('');
+  const[error,setError]=useState('');const[showSet,setShowSet]=useState(false);
+  const[apiBase,setApiBase]=useState(localStorage.getItem('api_base')||'http://localhost:8000');
+  const[copied,setCopied]=useState(false);const abortRef=useRef(null);
+  const ORDER=['Planner','Researcher','Writer','Reviewer'];
+  const init=()=>ORDER.map(a=>({agent:a,status:'pending',output:''}));
+  const submit=async()=>{
+    if(!task.trim()||loading)return;
+    setLoading(true);setResult('');setError('');setAgents(init());
+    const ctrl=new AbortController();abortRef.current=ctrl;
+    try{
+      const res=await fetch(`${apiBase}/api/run`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task:task.trim()}),signal:ctrl.signal});
+      if(!res.ok)throw new Error(`API error ${res.status} — check Settings for backend URL`);
+      const reader=res.body.getReader();const dec=new TextDecoder();let buf='';
+      outer:while(true){
+        const{done,value}=await reader.read();if(done)break;
+        buf+=dec.decode(value,{stream:true});
+        const lines=buf.split('\n');buf=lines.pop();
+        for(const line of lines){
+          if(!line.startsWith('data: '))continue;
+          const d=line.slice(6).trim();if(d==='[DONE]')break outer;
+          try{const e=JSON.parse(d);
+            if(e.type==='agent_start')setAgents(p=>p.map(a=>a.agent===e.agent?{...a,status:'running'}:a));
+            else if(e.type==='agent_done')setAgents(p=>p.map(a=>a.agent===e.agent?{...a,status:'done',output:e.output}:a));
+            else if(e.type==='final')setResult(e.result);
+            else if(e.type==='error'){setError(e.message);setLoading(false);}
+          }catch{}
+        }
+      }
+    }catch(e){if(e.name!=='AbortError')setError(e.message);}
+    finally{setLoading(false);}
+  };
+  const ex=['Write a marketing strategy for a SaaS product','Create a 30-day fitness plan for beginners','Build a roadmap for learning machine learning','Design a REST API for an e-commerce platform'];
+  const started=agents.some(a=>a.status!=='pending');
+  const copy=()=>{navigator.clipboard.writeText(result);setCopied(true);setTimeout(()=>setCopied(false),2000);};
+  return(
+    <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#0a0a0f'}}>
+      <header style={{borderBottom:'1px solid #1e1e2e',padding:'16px 24px',display:'flex',alignItems:'center',justifyContent:'space-between',backdropFilter:'blur(10px)',position:'sticky',top:0,zIndex:10,background:'rgba(10,10,15,0.92)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <div style={{width:38,height:38,borderRadius:10,background:'linear-gradient(135deg,#6c63ff,#a78bfa)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,boxShadow:'0 0 20px rgba(108,99,255,.4)'}}>🤖</div>
+          <div>
+            <div style={{fontWeight:700,fontSize:15,letterSpacing:'-0.3px',color:'#e2e2f0'}}>AI Task Manager</div>
+            <div style={{fontSize:11,color:'#6c63ff',fontWeight:500}}>Multi-Agent · Gemini · LangGraph</div>
+          </div>
+        </div>
+        <button onClick={()=>setShowSet(true)} style={{padding:'7px 10px',background:'transparent',border:'1px solid #2a2a3a',borderRadius:8,color:'#8888aa',cursor:'pointer',fontSize:16}} title="Settings">⚙️</button>
+      </header>
+      <main style={{flex:1,maxWidth:800,width:'100%',margin:'0 auto',padding:'32px 20px',display:'flex',flexDirection:'column',gap:24}}>
+        <div style={{textAlign:'center',paddingBottom:4}}>
+          <h1 style={{fontSize:'clamp(24px,5vw,36px)',fontWeight:800,background:'linear-gradient(135deg,#a78bfa,#6c63ff,#38bdf8)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',letterSpacing:'-1px',lineHeight:1.2,marginBottom:10}}>What can I help you build?</h1>
+          <p style={{color:'#8888aa',fontSize:14,lineHeight:1.6}}>4 AI agents collaborate — Planner · Researcher · Writer · Reviewer</p>
+        </div>
+        <div style={{background:'#111118',border:`1px solid ${loading?'#6c63ff55':'#2a2a3a'}`,borderRadius:16,overflow:'hidden',boxShadow:'0 4px 40px rgba(0,0,0,.4)',transition:'border-color .2s'}}>
+          <textarea value={task} onChange={e=>setTask(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))submit();}} placeholder="Describe your task in detail... (Ctrl+Enter to run)" disabled={loading} style={{width:'100%',minHeight:110,padding:'18px 20px',background:'transparent',border:'none',outline:'none',color:'#e2e2f0',fontSize:15,resize:'none',fontFamily:'inherit',lineHeight:1.7}}/>
+          <div style={{borderTop:'1px solid #1e1e2e',padding:'12px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+            <span style={{fontSize:11,color:'#555570'}}>{task.length} chars · Ctrl+Enter to run</span>
+            <div style={{display:'flex',gap:8}}>
+              {loading&&<button onClick={()=>{abortRef.current?.abort();setLoading(false);}} style={{padding:'8px 14px',background:'rgba(239,68,68,.15)',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,color:'#ef4444',cursor:'pointer',fontSize:13,fontWeight:500}}>⏹ Stop</button>}
+              <button onClick={submit} disabled={!task.trim()||loading} style={{padding:'9px 22px',background:task.trim()&&!loading?'linear-gradient(135deg,#6c63ff,#a78bfa)':'#2a2a3a',border:'none',borderRadius:8,color:task.trim()&&!loading?'#fff':'#555570',cursor:task.trim()&&!loading?'pointer':'not-allowed',fontSize:14,fontWeight:600,transition:'all .2s',boxShadow:task.trim()&&!loading?'0 4px 20px rgba(108,99,255,.35)':'none'}}>{loading?'⚙️ Running...':'▶ Run Task'}</button>
+            </div>
+          </div>
+        </div>
+        {!started&&!result&&(
+          <div style={{animation:'fadeIn .5s ease'}}>
+            <div style={{fontSize:11,color:'#555570',marginBottom:10,textTransform:'uppercase',letterSpacing:'.1em',fontWeight:600}}>Try an example</div>
+            <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
+              {ex.map((e,i)=>(
+                <button key={i} onClick={()=>setTask(e)} style={{padding:'7px 14px',background:'#1a1a24',border:'1px solid #2a2a3a',borderRadius:20,color:'#a0a0c0',cursor:'pointer',fontSize:13,transition:'all .2s'}}
+                  onMouseEnter={ev=>{ev.target.style.background='#2a2a3a';ev.target.style.color='#e2e2f0';}}
+                  onMouseLeave={ev=>{ev.target.style.background='#1a1a24';ev.target.style.color='#a0a0c0';}}>{e}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        {error&&<div style={{animation:'fadeIn .3s ease',padding:'14px 16px',background:'rgba(239,68,68,.1)',border:'1px solid rgba(239,68,68,.3)',borderRadius:10,color:'#fca5a5',fontSize:13}}>⚠️ {error}</div>}
+        {started&&(
+          <div style={{animation:'fadeIn .4s ease'}}>
+            <div style={{fontSize:11,color:'#555570',marginBottom:12,textTransform:'uppercase',letterSpacing:'.1em',fontWeight:600}}>Agent Pipeline</div>
+            <div style={{display:'flex',flexDirection:'column',gap:8}}>
+              {agents.map((a,i)=><AgentCard key={a.agent} {...a} index={i}/>)}
+            </div>
+          </div>
+        )}
+        {result&&(
+          <div style={{animation:'fadeIn .4s ease',border:'1px solid rgba(108,99,255,.4)',borderRadius:12,background:'rgba(108,99,255,.06)',padding:20}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
+              <div style={{fontSize:14,fontWeight:700,color:'#a78bfa'}}>✨ Final Result</div>
+              <button onClick={copy} style={{padding:'5px 12px',background:'rgba(108,99,255,.2)',border:'1px solid rgba(108,99,255,.4)',borderRadius:7,color:'#a78bfa',cursor:'pointer',fontSize:12,fontWeight:500}}>{copied?'✓ Copied!':'📋 Copy'}</button>
+            </div>
+            <div style={{fontSize:13.5,lineHeight:1.75,color:'#d0d0f0',whiteSpace:'pre-wrap',fontFamily:'inherit',maxHeight:420,overflowY:'auto'}}>{result}</div>
+          </div>
+        )}
+      </main>
+      <footer style={{borderTop:'1px solid #1e1e2e',padding:'14px 24px',textAlign:'center',fontSize:12,color:'#555570'}}>
+        AI Task Manager · Gemini + LangGraph · <a href="https://github.com/Z200-WEB/ai-task-manager" target="_blank" style={{color:'#6c63ff',textDecoration:'none'}}>GitHub ↗</a>
+      </footer>
+      {showSet&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.7)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100}} onClick={()=>setShowSet(false)}>
+          <div style={{background:'#1a1a24',border:'1px solid #2a2a3a',borderRadius:16,padding:28,width:420,maxWidth:'90vw'}} onClick={e=>e.stopPropagation()}>
+            <h3 style={{marginBottom:16,fontSize:16,color:'#e2e2f0'}}>⚙️ Settings</h3>
+            <label style={{fontSize:12,color:'#8888aa',display:'block',marginBottom:6}}>Backend API URL</label>
+            <input value={apiBase} onChange={e=>setApiBase(e.target.value)} style={{width:'100%',background:'#0a0a0f',border:'1px solid #3a3a4a',borderRadius:8,padding:'10px 12px',color:'#e2e2f0',fontSize:14,outline:'none'}}/>
+            <p style={{fontSize:11,color:'#8888aa',marginTop:6}}>Change to your deployed backend URL (Railway, Render, etc.)</p>
+            <div style={{display:'flex',gap:10,marginTop:20,justifyContent:'flex-end'}}>
+              <button onClick={()=>setShowSet(false)} style={{padding:'8px 16px',background:'transparent',border:'1px solid #3a3a4a',borderRadius:8,color:'#8888aa',cursor:'pointer',fontSize:13}}>Cancel</button>
+              <button onClick={()=>{localStorage.setItem('api_base',apiBase);setShowSet(false);}} style={{padding:'8px 20px',background:'#6c63ff',border:'none',borderRadius:8,color:'#fff',cursor:'pointer',fontSize:13,fontWeight:600}}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
