@@ -1,154 +1,126 @@
 import json
 import os
 from http.server import BaseHTTPRequestHandler
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.graph import StateGraph, END
-from typing import TypedDict, List
+import google.generativeai as genai
 
 
-def get_llm():
-    return ChatGoogleGenerativeAI(
-                model="gemini-2.0-flash",
-        google_api_key=os.environ.get("GEMINI_API_KEY"),
-        temperature=0.7,
-    )
-h
-
-class AgentState(TypedDict):
-    task: str
-    plan: str
-    research: str
-    draft: str
-    final: str
-    steps: List[dict]
+def get_model():
+    genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
+    return genai.GenerativeModel("gemini-2.0-flash")
 
 
-def planner_agent(state):
-    llm = get_llm()
-    response = llm.invoke([
-        SystemMessage(content="You are a Planner AI agent. Break down the given task into 3-4 clear, actionable steps. Be concise and structured. Output as a numbered list."),
-        HumanMessage(content=f"Task: {state['task']}")
-    ])
-    step = {"agent": "Planner", "icon": "map", "status": "done", "output": response.content}
-    return {**state, "plan": response.content, "steps": state["steps"] + [step]}
-
-
-def researcher_agent(state):
-    llm = get_llm()
-    response = llm.invoke([
-        SystemMessage(content="You are a Research AI agent. Based on the task and plan, provide relevant insights, facts, best practices, and key points. Be informative but concise."),
-        HumanMessage(content=f"Task: {state['task']}\n\nPlan:\n{state['plan']}")
-    ])
-    step = {"agent": "Researcher", "icon": "search", "status": "done", "output": response.content}
-    return {**state, "research": response.content, "steps": state["steps"] + [step]}
-
-
-def writer_agent(state):
-    llm = get_llm()
-    response = llm.invoke([
-        SystemMessage(content="You are a Writer AI agent. Using the task, plan, and research, create a comprehensive, well-structured draft. Make it practical and actionable."),
-        HumanMessage(content=f"Task: {state['task']}\n\nPlan:\n{state['plan']}\n\nResearch:\n{state['research']}")
-    ])
-    step = {"agent": "Writer", "icon": "pencil", "status": "done", "output": response.content}
-    return {**state, "draft": response.content, "steps": state["steps"] + [step]}
-
-
-def reviewer_agent(state):
-    llm = get_llm()
-    response = llm.invoke([
-        SystemMessage(content="You are a Reviewer AI agent. Review the draft, fix issues, enhance clarity, add missing points, and output the final polished version directly."),
-        HumanMessage(content=f"Original Task: {state['task']}\n\nDraft:\n{state['draft']}")
-    ])
-    step = {"agent": "Reviewer", "icon": "check", "status": "done", "output": response.content}
-    return {**state, "final": response.content, "steps": state["steps"] + [step]}
-
-
-def build_graph():
-    graph = StateGraph(AgentState)
-    graph.add_node("planner", planner_agent)
-    graph.add_node("researcher", researcher_agent)
-    graph.add_node("writer", writer_agent)
-    graph.add_node("reviewer", reviewer_agent)
-    graph.set_entry_point("planner")
-    graph.add_edge("planner", "researcher")
-    graph.add_edge("researcher", "writer")
-    graph.add_edge("writer", "reviewer")
-    graph.add_edge("reviewer", END)
-    return graph.compile()
+AGENTS = [
+    {
+        "key": "planner",
+        "name": "Planner",
+        "icon": "map",
+        "desc": "Breaking down the task...",
+        "prompt": "You are a Planner AI. Break down the given task into 3-4 clear, actionable steps. Be concise and structured. Output as a numbered list.",
+    },
+    {
+        "key": "researcher",
+        "name": "Researcher",
+        "icon": "search",
+        "desc": "Gathering insights...",
+        "prompt": "You are a Researcher AI. Based on the task and plan provided, give relevant insights, facts, best practices, and key points. Be informative but concise.",
+    },
+    {
+        "key": "writer",
+        "name": "Writer",
+        "icon": "pencil",
+        "desc": "Drafting the response...",
+        "prompt": "You are a Writer AI. Using the task, plan, and research provided, create a comprehensive, well-structured draft. Make it practical and actionable.",
+    },
+    {
+        "key": "reviewer",
+        "name": "Reviewer",
+        "icon": "check",
+        "desc": "Reviewing and polishing...",
+        "prompt": "You are a Reviewer AI. Review the draft and improve it. Fix issues, enhance clarity, add missing points, and output the final polished version directly.",
+    },
+]
 
 
 class handler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(200)
-        self._send_cors_headers()
+        self._cors()
         self.end_headers()
 
     def do_POST(self):
         try:
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length)
-            data = json.loads(body)
-            task = data.get("task", "").strip()
-
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            task = body.get("task", "").strip()
             if not task:
                 self.send_response(400)
-                self._send_cors_headers()
+                self._cors()
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": "task is required"}).encode())
+                self.wfile.write(json.dumps({"error": "task required"}).encode())
                 return
 
             self.send_response(200)
-            self._send_cors_headers()
+            self._cors()
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("X-Accel-Buffering", "no")
             self.end_headers()
 
-            agent_order = ["planner", "researcher", "writer", "reviewer"]
-            agent_meta = {
-                "planner":    {"name": "Planner",    "icon": "map",    "desc": "Breaking down the task..."},
-                "researcher": {"name": "Researcher", "icon": "search", "desc": "Gathering insights..."},
-                "writer":     {"name": "Writer",     "icon": "pencil", "desc": "Drafting the response..."},
-                "reviewer":   {"name": "Reviewer",   "icon": "check",  "desc": "Reviewing and polishing..."},
-            }
+            model = get_model()
+            context = {"task": task, "plan": "", "research": "", "draft": ""}
 
-            state = {"task": task, "plan": "", "research": "", "draft": "", "final": "", "steps": []}
-            graph = build_graph()
-
-            for agent_key in agent_order:
-                meta = agent_meta[agent_key]
-                start_event = {"type": "agent_start", "agent": meta["name"], "icon": meta["icon"], "desc": meta["desc"]}
-                self._send_event(start_event)
+            for agent in AGENTS:
+                self._emit({"type": "agent_start", "agent": agent["name"], "icon": agent["icon"], "desc": agent["desc"]})
                 try:
-                    for chunk in graph.stream(state, {"recursion_limit": 10}):
-                        if agent_key in chunk:
-                            state = chunk[agent_key]
-                            break
-                except Exception as e:
-                    self._send_event({"type": "error", "message": str(e)})
-                    return
-                output = state["steps"][-1]["output"] if state["steps"] else ""
-                self._send_event({"type": "agent_done", "agent": meta["name"], "icon": meta["icon"], "output": output})
+                    if agent["key"] == "planner":
+                        prompt = f"{agent['prompt']}\n\nTask: {task}"
+                    elif agent["key"] == "researcher":
+                        prompt = f"{agent['prompt']}\n\nTask: {task}\n\nPlan:\n{context['plan']}"
+                    elif agent["key"] == "writer":
+                        prompt = f"{agent['prompt']}\n\nTask: {task}\n\nPlan:\n{context['plan']}\n\nResearch:\n{context['research']}"
+                    else:
+                        prompt = f"{agent['prompt']}\n\nOriginal Task: {task}\n\nDraft:\n{context['draft']}"
 
-            self._send_event({"type": "final", "result": state.get("final", "")})
+                    response = model.generate_content(prompt)
+                    output = response.text
+
+                    if agent["key"] == "planner":
+                        context["plan"] = output
+                    elif agent["key"] == "researcher":
+                        context["research"] = output
+                    elif agent["key"] == "writer":
+                        context["draft"] = output
+
+                    self._emit({"type": "agent_done", "agent": agent["name"], "icon": agent["icon"], "output": output})
+
+                    if agent["key"] == "reviewer":
+                        self._emit({"type": "final", "result": output})
+
+                except Exception as e:
+                    self._emit({"type": "error", "message": str(e)})
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    self.wfile.flush()
+                    return
+
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
 
         except Exception as e:
             try:
-                self._send_event({"type": "error", "message": str(e)})
+                self._emit({"type": "error", "message": str(e)})
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
             except Exception:
                 pass
 
-    def _send_event(self, data):
+    def _emit(self, data):
         msg = f"data: {json.dumps(data)}\n\n"
         self.wfile.write(msg.encode())
         self.wfile.flush()
 
-    def _send_cors_headers(self):
+    def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
