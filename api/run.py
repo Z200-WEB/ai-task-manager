@@ -5,7 +5,7 @@ from flask import Flask, request, Response, stream_with_context
 
 app = Flask(__name__)
 
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
 
 AGENTS = [
     {
