@@ -1,15 +1,11 @@
 import json
 import os
-from http.server import BaseHTTPRequestHandler
+from flask import Flask, request, Response, stream_with_context
 import google.generativeai as genai
 
+app = Flask(__name__)
 
-def get_model():
-    genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
-        return genai.GenerativeModel("gemini-1.5-flash-latest")
-
-
-AGENTS = [h
+AGENTS = [
     {
         "key": "planner",
         "name": "Planner",
@@ -41,86 +37,78 @@ AGENTS = [h
 ]
 
 
-class handler(BaseHTTPRequestHandler):
+def get_model():
+    genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
+    return genai.GenerativeModel("gemini-1.5-flash-latest")
 
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self._cors()
-        self.end_headers()
 
-    def do_POST(self):
+def generate_stream(task):
+    model = get_model()
+    context = {"task": task, "plan": "", "research": "", "draft": ""}
+
+    for agent in AGENTS:
+        yield f"data: {json.dumps({'type': 'agent_start', 'agent': agent['name'], 'icon': agent['icon'], 'desc': agent['desc']})}\n\n"
+
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length))
-            task = body.get("task", "").strip()
-            if not task:
-                self.send_response(400)
-                self._cors()
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(json.dumps({"error": "task required"}).encode())
-                return
+            if agent["key"] == "planner":
+                prompt = f"{agent['prompt']}\n\nTask: {task}"
+            elif agent["key"] == "researcher":
+                prompt = f"{agent['prompt']}\n\nTask: {task}\n\nPlan:\n{context['plan']}"
+            elif agent["key"] == "writer":
+                prompt = f"{agent['prompt']}\n\nTask: {task}\n\nPlan:\n{context['plan']}\n\nResearch:\n{context['research']}"
+            else:
+                prompt = f"{agent['prompt']}\n\nOriginal Task: {task}\n\nDraft:\n{context['draft']}"
 
-            self.send_response(200)
-            self._cors()
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("X-Accel-Buffering", "no")
-            self.end_headers()
+            response = model.generate_content(prompt)
+            output = response.text
 
-            model = get_model()
-            context = {"task": task, "plan": "", "research": "", "draft": ""}
+            if agent["key"] == "planner":
+                context["plan"] = output
+            elif agent["key"] == "researcher":
+                context["research"] = output
+            elif agent["key"] == "writer":
+                context["draft"] = output
 
-            for agent in AGENTS:
-                self._emit({"type": "agent_start", "agent": agent["name"], "icon": agent["icon"], "desc": agent["desc"]})
-                try:
-                    if agent["key"] == "planner":
-                        prompt = f"{agent['prompt']}\n\nTask: {task}"
-                    elif agent["key"] == "researcher":
-                        prompt = f"{agent['prompt']}\n\nTask: {task}\n\nPlan:\n{context['plan']}"
-                    elif agent["key"] == "writer":
-                        prompt = f"{agent['prompt']}\n\nTask: {task}\n\nPlan:\n{context['plan']}\n\nResearch:\n{context['research']}"
-                    else:
-                        prompt = f"{agent['prompt']}\n\nOriginal Task: {task}\n\nDraft:\n{context['draft']}"
+            yield f"data: {json.dumps({'type': 'agent_done', 'agent': agent['name'], 'icon': agent['icon'], 'output': output})}\n\n"
 
-                    response = model.generate_content(prompt)
-                    output = response.text
-
-                    if agent["key"] == "planner":
-                        context["plan"] = output
-                    elif agent["key"] == "researcher":
-                        context["research"] = output
-                    elif agent["key"] == "writer":
-                        context["draft"] = output
-
-                    self._emit({"type": "agent_done", "agent": agent["name"], "icon": agent["icon"], "output": output})
-
-                    if agent["key"] == "reviewer":
-                        self._emit({"type": "final", "result": output})
-
-                except Exception as e:
-                    self._emit({"type": "error", "message": str(e)})
-                    self.wfile.write(b"data: [DONE]\n\n")
-                    self.wfile.flush()
-                    return
-
-            self.wfile.write(b"data: [DONE]\n\n")
-            self.wfile.flush()
+            if agent["key"] == "reviewer":
+                yield f"data: {json.dumps({'type': 'final', 'result': output})}\n\n"
 
         except Exception as e:
-            try:
-                self._emit({"type": "error", "message": str(e)})
-                self.wfile.write(b"data: [DONE]\n\n")
-                self.wfile.flush()
-            except Exception:
-                pass
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            yield "data: [DONE]\n\n"
+            return
 
-    def _emit(self, data):
-        msg = f"data: {json.dumps(data)}\n\n"
-        self.wfile.write(msg.encode())
-        self.wfile.flush()
+    yield "data: [DONE]\n\n"
 
-    def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+@app.route("/api/run", methods=["POST", "OPTIONS"])
+def run():
+    if request.method == "OPTIONS":
+        resp = Response("")
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return resp
+
+    try:
+        body = request.get_json(force=True)
+        task = (body.get("task", "") or "").strip()
+        if not task:
+            resp = Response(json.dumps({"error": "task required"}), status=400, mimetype="application/json")
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+        def stream():
+            yield from generate_stream(task)
+
+        resp = Response(stream_with_context(stream()), mimetype="text/event-stream")
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Cache-Control"] = "no-cache"
+        resp.headers["X-Accel-Buffering"] = "no"
+        return resp
+
+    except Exception as e:
+        resp = Response(json.dumps({"error": str(e)}), status=500, mimetype="application/json")
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
