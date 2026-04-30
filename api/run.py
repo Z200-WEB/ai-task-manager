@@ -6,10 +6,10 @@ import google.generativeai as genai
 
 def get_model():
     genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
-    return genai.GenerativeModel("gemini-2.0-flash")
+        return genai.GenerativeModel("gemini-1.5-flash-latest")
 
 
-AGENTS = [
+AGENTS = [h
     {
         "key": "planner",
         "name": "Planner",
