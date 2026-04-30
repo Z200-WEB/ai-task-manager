@@ -9,11 +9,11 @@ from typing import TypedDict, List
 
 def get_llm():
     return ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+                model="gemini-2.0-flash",
         google_api_key=os.environ.get("GEMINI_API_KEY"),
         temperature=0.7,
     )
-
+h
 
 class AgentState(TypedDict):
     task: str
