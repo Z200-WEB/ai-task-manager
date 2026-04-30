@@ -1,9 +1,11 @@
 import json
 import os
+import requests
 from flask import Flask, request, Response, stream_with_context
-import google.generativeai as genai
 
 app = Flask(__name__)
+
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent"
 
 AGENTS = [
     {
@@ -37,13 +39,20 @@ AGENTS = [
 ]
 
 
-def get_model():
-    genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
-    return genai.GenerativeModel("gemini-1.0-pro")
+def call_gemini(prompt):
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    url = f"{GEMINI_API_URL}?key={api_key}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"maxOutputTokens": 2048}
+    }
+    resp = requests.post(url, json=payload, timeout=60)
+    resp.raise_for_status()
+    data = resp.json()
+    return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
 def generate_stream(task):
-    model = get_model()
     context = {"task": task, "plan": "", "research": "", "draft": ""}
 
     for agent in AGENTS:
@@ -59,8 +68,7 @@ def generate_stream(task):
             else:
                 prompt = f"{agent['prompt']}\n\nOriginal Task: {task}\n\nDraft:\n{context['draft']}"
 
-            response = model.generate_content(prompt)
-            output = response.text
+            output = call_gemini(prompt)
 
             if agent["key"] == "planner":
                 context["plan"] = output
