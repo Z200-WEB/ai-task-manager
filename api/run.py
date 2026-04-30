@@ -39,7 +39,7 @@ AGENTS = [
 
 def get_model():
     genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
-    return genai.GenerativeModel("gemini-2.0-flash-lite")
+    return genai.GenerativeModel("gemini-pro")
 
 
 def generate_stream(task):
