@@ -1,6 +1,11 @@
 {
-        "version": 2,
-        "rewrites": [
-                  { "source": "/(.*)", "destination": "/frontend/index.html" }
-        ]
+          "version": 2,
+          "builds": [
+                      { "src": "api/run.py", "use": "@vercel/python" },
+                      { "src": "frontend/index.html", "use": "@vercel/static" }
+          ],
+          "routes": [
+                      { "src": "/api/(.*)", "dest": "/api/run.py" },
+                      { "src": "/(.*)", "dest": "/frontend/index.html" }
+          ]
 }
