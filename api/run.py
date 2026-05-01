@@ -1,3 +1,4 @@
+app = None  # Placeholder for Vercel WSGI detection
 from http.server import BaseHTTPRequestHandler
 import json
 import os
