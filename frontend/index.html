@@ -3,148 +3,360 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI Task Manager</title>
+  <title>AI Agent System</title>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    :root { --bg:#0a0a0f; --surface:#111118; --border:#2a2a3a; --accent:#6c63ff; --text:#e2e2f0; --muted:#8888aa; }
-    html,body { height:100%; font-family:'Inter',sans-serif; background:var(--bg); color:var(--text); }
-    #root { height:100%; }
-    ::-webkit-scrollbar { width:6px; }
-    ::-webkit-scrollbar-track { background:#111118; }
-    ::-webkit-scrollbar-thumb { background:#2a2a3a; border-radius:3px; }
-    @keyframes spin { to { transform:rotate(360deg); } }
-    @keyframes pulse { 0%,100%{opacity:1;}50%{opacity:.4;} }
-    @keyframes fadeIn { from{opacity:0;transform:translateY(8px);}to{opacity:1;transform:translateY(0);} }
-    @keyframes slideIn { from{opacity:0;transform:translateX(-12px);}to{opacity:1;transform:translateX(0);} }
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{--bg:#0a0a0f;--surface:#111118;--border:#2a2a3a;--accent:#6c63ff;--text:#e2e2f0;--muted:#8888aa}
+    html,body{height:100%;font-family:'Inter',sans-serif;background:var(--bg);color:var(--text)}
+    #root{height:100%}
+    ::-webkit-scrollbar{width:6px}
+    ::-webkit-scrollbar-track{background:#111118}
+    ::-webkit-scrollbar-thumb{background:#2a2a3a;border-radius:3px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes slideIn{from{opacity:0;transform:translateX(-12px)}to{opacity:1;transform:translateX(0)}}
+    .panel-scroll{overflow-y:auto}
+    .panel-scroll::-webkit-scrollbar{width:4px}
+    .panel-scroll::-webkit-scrollbar-thumb{background:#3a3a4a;border-radius:2px}
+    select option{background:#1a1a2e;color:#e2e2f0}
   </style>
 </head>
 <body>
 <div id="root"></div>
 <script type="text/babel">
-const{useState,useRef}=React;
-const C={Planner:{color:'#6c63ff',bg:'rgba(108,99,255,0.12)',icon:'🗺️'},Researcher:{color:'#06b6d4',bg:'rgba(6,182,212,0.12)',icon:'🔍'},Writer:{color:'#f59e0b',bg:'rgba(245,158,11,0.12)',icon:'✍️'},Reviewer:{color:'#10b981',bg:'rgba(16,185,129,0.12)',icon:'✅'}};
-function AgentCard({agent,status,output,index}){
-  const[exp,setExp]=useState(false);
-  const c=C[agent]||{color:'#8888aa',bg:'rgba(136,136,170,0.1)',icon:'🤖'};
+const { useState, useRef, useCallback } = React;
+
+const PROVIDER_MODELS = {
+  openai: ['gpt-4o','gpt-4o-mini','gpt-4-turbo','gpt-3.5-turbo'],
+  claude: ['claude-opus-4-5','claude-sonnet-4-5','claude-haiku-3-5','claude-3-opus-20240229'],
+  gemini: ['gemini-2.5-flash','gemini-2.0-flash','gemini-1.5-pro','gemini-1.5-flash'],
+  custom: ['custom-model'],
+};
+const PROVIDER_LABELS = {openai:'OpenAI',claude:'Claude (Anthropic)',gemini:'Google Gemini',custom:'Custom API'};
+
+async function callOpenAI({prompt,model,temperature,maxTokens,apiKey}){
+  const r=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model,temperature,max_tokens:maxTokens,messages:[{role:'user',content:prompt}]})});
+  if(!r.ok){const e=await r.text();throw new Error('OpenAI '+r.status+': '+e);}
+  return (await r.json()).choices[0].message.content;
+}
+async function callClaude({prompt,model,temperature,maxTokens,apiKey}){
+  const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json','x-api-key':apiKey,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true'},body:JSON.stringify({model,temperature,max_tokens:maxTokens,messages:[{role:'user',content:prompt}]})});
+  if(!r.ok){const e=await r.text();throw new Error('Claude '+r.status+': '+e);}
+  return (await r.json()).content[0].text;
+}
+async function callGemini({prompt,model,temperature,maxTokens,apiKey}){
+  const r=await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+model+':generateContent?key='+apiKey,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{temperature,maxOutputTokens:maxTokens}})});
+  if(!r.ok){const e=await r.text();throw new Error('Gemini '+r.status+': '+e);}
+  return (await r.json()).candidates[0].content.parts[0].text;
+}
+async function callCustom({prompt,model,temperature,maxTokens,apiKey,customUrl}){
+  const r=await fetch(customUrl||'https://api.example.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+apiKey},body:JSON.stringify({model,temperature,max_tokens:maxTokens,messages:[{role:'user',content:prompt}]})});
+  if(!r.ok){const e=await r.text();throw new Error('Custom '+r.status+': '+e);}
+  const d=await r.json();return d.choices?.[0]?.message?.content||d.content?.[0]?.text||JSON.stringify(d);
+}
+
+const providers={openai:callOpenAI,claude:callClaude,gemini:callGemini,custom:callCustom};
+
+async function generateWithRetry({cfg,prompt,fallbackCfgs=[],maxRetries=3,onStatus}){
+  const attempts=[cfg,...fallbackCfgs];
+  for(let ai=0;ai<attempts.length;ai++){
+    const cur=attempts[ai];
+    const lbl=ai===0?'':' (fallback: '+PROVIDER_LABELS[cur.provider]+')';
+    for(let r=0;r<maxRetries;r++){
+      try{
+        onStatus&&onStatus('Calling '+PROVIDER_LABELS[cur.provider]+lbl+(r>0?' retry '+r:'')+'...');
+        const fn=providers[cur.provider];
+        if(!fn)throw new Error('Unknown provider: '+cur.provider);
+        return await fn({prompt,model:cur.model,temperature:parseFloat(cur.temperature||0.7),maxTokens:parseInt(cur.maxTokens||1024),apiKey:cur.apiKey,customUrl:cur.customUrl});
+      }catch(err){
+        const is503=err.message.includes('503')||err.message.includes('overloaded')||err.message.includes('unavailable');
+        const isLastAttempt=(r===maxRetries-1)&&(ai===attempts.length-1);
+        if(!isLastAttempt&&is503){onStatus&&onStatus('503 – retrying in '+((r+1)*2)+'s...');await new Promise(rs=>setTimeout(rs,(r+1)*2000));continue;}
+        if(r===maxRetries-1&&ai<attempts.length-1)break;
+        if(isLastAttempt)throw err;
+      }
+    }
+  }
+}
+
+const AGENT_META={
+  Planner:   {color:'#6c63ff',bg:'rgba(108,99,255,0.12)',emoji:'🗺️'},
+  Researcher:{color:'#06b6d4',bg:'rgba(6,182,212,0.12)',emoji:'🔍'},
+  Writer:    {color:'#f59e0b',bg:'rgba(245,158,11,0.12)',emoji:'✍️'},
+  Reviewer:  {color:'#10b981',bg:'rgba(16,185,129,0.12)',emoji:'✅'},
+};
+const AGENT_ORDER=['Planner','Researcher','Writer','Reviewer'];
+const AGENT_PROMPTS={
+  Planner:(t)=>'You are a strategic Planner AI. Break the following task into 4-6 clear, actionable steps. Output a structured numbered list.\n\nTask: '+t,
+  Researcher:(t,plan)=>'You are a Research AI. Given this task and plan, provide key insights, facts, and best practices.\n\nTask: '+t+'\n\nPlan:\n'+plan,
+  Writer:(t,research)=>'You are a professional Writer AI. Using the task and research, write a comprehensive, well-structured draft.\n\nTask: '+t+'\n\nResearch:\n'+research,
+  Reviewer:(draft)=>'You are a Reviewer AI. Review and polish this draft into a final, publication-ready version.\n\nDraft:\n'+draft,
+};
+const DEFAULT_CFG={provider:'gemini',apiKey:'',model:'gemini-2.5-flash',temperature:'0.7',maxTokens:'1024',customUrl:''};
+function makeDefaultConfigs(){const c={};AGENT_ORDER.forEach(a=>{c[a]={...DEFAULT_CFG};});return c;}
+
+function SettingsPanel({agentConfigs,onUpdate,globalFallback,onFallbackUpdate}){
+  const [activeAgent,setActiveAgent]=useState('Planner');
+  const cfg=agentConfigs[activeAgent];
+  const models=PROVIDER_MODELS[cfg.provider]||['custom-model'];
+  const up=(k,v)=>onUpdate(activeAgent,k,v);
+  const iS={width:'100%',padding:'8px 10px',background:'#0e0e16',border:'1px solid #2a2a3a',borderRadius:8,color:'#e2e2f0',fontSize:13,outline:'none',fontFamily:'inherit'};
+  const lS={fontSize:11,color:'#8888aa',fontWeight:600,textTransform:'uppercase',letterSpacing:'.08em',marginBottom:4};
   return(
-    <div style={{animation:`slideIn .35s ease ${index*.08}s both`,border:`1px solid ${status==='done'?c.color+'44':status==='running'?c.color+'88':'#2a2a3a'}`,borderRadius:12,background:status!=='pending'?c.bg:'transparent',overflow:'hidden',transition:'all .3s',boxShadow:status==='running'?`0 0 20px ${c.color}33`:'none'}}>
-      <div style={{display:'flex',alignItems:'center',gap:12,padding:'14px 16px',cursor:output?'pointer':'default'}} onClick={()=>output&&setExp(e=>!e)}>
-        <div style={{fontSize:20,width:32,textAlign:'center'}}>{status==='running'?<span style={{display:'inline-block',animation:'spin 1s linear infinite'}}>⚙️</span>:c.icon}</div>
-        <div style={{flex:1}}>
-          <div style={{fontWeight:600,fontSize:14,color:status!=='pending'?c.color:'#8888aa'}}>{agent}</div>
-          <div style={{fontSize:12,color:'#8888aa',marginTop:2}}>{status==='running'?<span style={{animation:'pulse 1.2s infinite'}}>Processing...</span>:status==='done'?'Completed ✓':'Waiting'}</div>
+    <div style={{animation:'fadeIn .3s ease',background:'#111118',border:'1px solid #2a2a3a',borderRadius:16,overflow:'hidden'}}>
+      <div style={{padding:'12px 16px',borderBottom:'1px solid #1e1e2e',display:'flex',alignItems:'center',gap:8}}>
+        <span style={{fontSize:15}}>⚙️</span>
+        <span style={{fontWeight:700,fontSize:14,color:'#a78bfa'}}>API Configuration</span>
+        <span style={{fontSize:11,color:'#555570',marginLeft:'auto'}}>Each agent can use a different provider</span>
+      </div>
+      <div style={{display:'flex',borderBottom:'1px solid #1e1e2e',overflowX:'auto'}}>
+        {AGENT_ORDER.map(a=>{
+          const m=AGENT_META[a];const active=a===activeAgent;
+          return(<button key={a} onClick={()=>setActiveAgent(a)} style={{padding:'8px 14px',background:active?m.bg:'transparent',borderBottom:active?'2px solid '+m.color:'2px solid transparent',border:'none',borderRadius:0,color:active?m.color:'#8888aa',cursor:'pointer',fontSize:12,fontWeight:600,whiteSpace:'nowrap',transition:'all .2s'}}>{m.emoji} {a}</button>);
+        })}
+      </div>
+      <div style={{padding:16,display:'flex',flexDirection:'column',gap:14}}>
+        <div><div style={lS}>Provider</div>
+          <select style={{...iS,cursor:'pointer'}} value={cfg.provider} onChange={e=>{const p=e.target.value;up('provider',p);up('model',PROVIDER_MODELS[p]?.[0]||'custom-model');}}>
+            {Object.entries(PROVIDER_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+          </select>
         </div>
-        <div style={{display:'flex',alignItems:'center',gap:8}}>
-          {status==='running'&&<div style={{width:8,height:8,borderRadius:'50%',background:c.color,animation:'pulse 1s infinite'}}/>}
-          {status==='done'&&<div style={{width:8,height:8,borderRadius:'50%',background:'#10b981'}}/>}
-          {output&&<span style={{color:'#8888aa',fontSize:11,transform:exp?'rotate(180deg)':'none',transition:'transform .2s',display:'inline-block'}}>▼</span>}
+        <div><div style={lS}>API Key</div><input type="password" style={iS} value={cfg.apiKey} placeholder="Enter API key..." onChange={e=>up('apiKey',e.target.value)}/></div>
+        <div><div style={lS}>Model</div>
+          {cfg.provider==='custom'
+            ?<input style={iS} value={cfg.model} placeholder="your-model-name" onChange={e=>up('model',e.target.value)}/>
+            :<select style={{...iS,cursor:'pointer'}} value={cfg.model} onChange={e=>up('model',e.target.value)}>{models.map(m=><option key={m} value={m}>{m}</option>)}</select>}
+        </div>
+        {cfg.provider==='custom'&&<div><div style={lS}>Endpoint URL</div><input style={iS} value={cfg.customUrl} placeholder="https://api.example.com/v1/chat/completions" onChange={e=>up('customUrl',e.target.value)}/></div>}
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          <div><div style={lS}>Temperature <span style={{color:'#6c63ff'}}>{cfg.temperature}</span></div><input type="range" min="0" max="2" step="0.1" value={cfg.temperature} onChange={e=>up('temperature',e.target.value)} style={{width:'100%',accentColor:'#6c63ff'}}/></div>
+          <div><div style={lS}>Max Tokens</div><input type="number" style={iS} value={cfg.maxTokens} onChange={e=>up('maxTokens',e.target.value)} min="64" max="8192" step="64"/></div>
+        </div>
+        <div style={{borderTop:'1px solid #1e1e2e',paddingTop:12}}>
+          <div style={lS}>Fallback Provider (auto-switch on error)</div>
+          <select style={{...iS,cursor:'pointer'}} value={globalFallback.provider} onChange={e=>{onFallbackUpdate('provider',e.target.value);onFallbackUpdate('model',PROVIDER_MODELS[e.target.value]?.[0]||'');}}>
+            <option value="">— None —</option>
+            {Object.entries(PROVIDER_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+          </select>
+          {globalFallback.provider&&<input type="password" style={{...iS,marginTop:8}} value={globalFallback.apiKey} placeholder={'Fallback key for '+PROVIDER_LABELS[globalFallback.provider]} onChange={e=>onFallbackUpdate('apiKey',e.target.value)}/>}
         </div>
       </div>
-      {exp&&output&&<div style={{padding:'0 16px 14px',borderTop:`1px solid ${c.color}22`}}><pre style={{marginTop:10,fontSize:12.5,lineHeight:1.65,color:'#c8c8e8',whiteSpace:'pre-wrap',fontFamily:'inherit',maxHeight:260,overflowY:'auto'}}>{output}</pre></div>}
     </div>
   );
 }
-function App(){
-  const[task,setTask]=useState('');const[loading,setLoading]=useState(false);
-  const[agents,setAgents]=useState([]);const[result,setResult]=useState('');
-  const[error,setError]=useState('');const[copied,setCopied]=useState(false);
-  const abortRef=useRef(null);
-  const ORDER=['Planner','Researcher','Writer','Reviewer'];
-  const init=()=>ORDER.map(a=>({agent:a,status:'pending',output:''}));
-  const submit=async()=>{
-    if(!task.trim()||loading)return;
-    setLoading(true);setResult('');setError('');setAgents(init());
-    const ctrl=new AbortController();abortRef.current=ctrl;
-    try{
-      const res=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({task:task.trim()}),signal:ctrl.signal});
-      if(!res.ok)throw new Error('API error '+res.status+': '+await res.text());
-      const reader=res.body.getReader();const dec=new TextDecoder();let buf='';
-      outer:while(true){
-        const{done,value}=await reader.read();if(done)break;
-        buf+=dec.decode(value,{stream:true});
-        const lines=buf.split('\n');buf=lines.pop();
-        for(const line of lines){
-          if(!line.startsWith('data: '))continue;
-          const d=line.slice(6).trim();if(d==='[DONE]')break outer;
-          try{const e=JSON.parse(d);
-            if(e.type==='agent_start')setAgents(p=>p.map(a=>a.agent===e.agent?{...a,status:'running'}:a));
-            else if(e.type==='agent_done')setAgents(p=>p.map(a=>a.agent===e.agent?{...a,status:'done',output:e.output}:a));
-            else if(e.type==='final')setResult(e.result);
-            else if(e.type==='error'){setError(e.message);setLoading(false);}
-          }catch{}
-        }
-      }
-    }catch(e){if(e.name!=='AbortError')setError(e.message);}
-    finally{setLoading(false);}
-  };
-  const ex=['Write a marketing strategy for a SaaS product','Create a 30-day fitness plan for beginners','Build a roadmap for learning machine learning','Design a REST API for an e-commerce platform'];
-  const started=agents.some(a=>a.status!=='pending');
-  const copy=()=>{navigator.clipboard.writeText(result);setCopied(true);setTimeout(()=>setCopied(false),2000);};
+
+function AgentCard({agent,status,output,statusMsg,index,cfg}){
+  const [exp,setExp]=useState(false);
+  const m=AGENT_META[agent]||{color:'#8888aa',bg:'rgba(136,136,170,0.1)',emoji:'🤖'};
+  const prov=cfg?PROVIDER_LABELS[cfg.provider]||cfg.provider:'';
+  const borderC=status==='done'?m.color+'55':status==='running'?m.color+'99':status==='error'?'#ef444455':'#2a2a3a';
+  const glow=status==='running'?'0 0 24px '+m.color+'44':status==='error'?'0 0 20px rgba(239,68,68,.2)':'none';
   return(
-    <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#0a0a0f'}}>
-      <header style={{borderBottom:'1px solid #1e1e2e',padding:'16px 24px',display:'flex',alignItems:'center',justifyContent:'space-between',backdropFilter:'blur(10px)',position:'sticky',top:0,zIndex:10,background:'rgba(10,10,15,0.92)'}}>
-        <div style={{display:'flex',alignItems:'center',gap:12}}>
-          <div style={{width:38,height:38,borderRadius:10,background:'linear-gradient(135deg,#6c63ff,#a78bfa)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,boxShadow:'0 0 20px rgba(108,99,255,.4)'}}>🤖</div>
-          <div>
-            <div style={{fontWeight:700,fontSize:15,letterSpacing:'-0.3px',color:'#e2e2f0'}}>AI Task Manager</div>
-            <div style={{fontSize:11,color:'#6c63ff',fontWeight:500}}>Multi-Agent · Gemini · LangGraph</div>
+    <div style={{animation:'slideIn .35s ease '+(index*.08)+'s both',border:'1px solid '+borderC,borderRadius:12,background:status!=='idle'?(status==='error'?'rgba(239,68,68,.06)':m.bg):'transparent',overflow:'hidden',transition:'all .3s',boxShadow:glow}}>
+      <div style={{display:'flex',alignItems:'center',gap:12,padding:'14px 16px',cursor:output?'pointer':'default'}} onClick={()=>output&&setExp(e=>!e)}>
+        <div style={{fontSize:22,width:34,textAlign:'center',flexShrink:0}}>{status==='running'?<span style={{display:'inline-block',animation:'spin 1s linear infinite'}}>⚙️</span>:status==='error'?'❌':m.emoji}</div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:700,fontSize:14,color:status!=='idle'?(status==='error'?'#ef4444':m.color):'#8888aa'}}>{agent}</div>
+          <div style={{fontSize:11,color:'#8888aa',marginTop:2}}>
+            {status==='running'?<span style={{animation:'pulse 1.2s infinite',color:m.color}}>{statusMsg||'Processing...'}</span>
+              :status==='done'?<span style={{color:'#10b981'}}>✓ Completed</span>
+              :status==='error'?<span style={{color:'#ef4444'}}>{statusMsg||'Error'}</span>
+              :'Waiting'}
           </div>
         </div>
-        <a href="https://github.com/Z200-WEB/ai-task-manager" target="_blank" style={{padding:'7px 12px',background:'transparent',border:'1px solid #2a2a3a',borderRadius:8,color:'#8888aa',textDecoration:'none',fontSize:12}}>GitHub ↗</a>
-      </header>
-      <main style={{flex:1,maxWidth:800,width:'100%',margin:'0 auto',padding:'32px 20px',display:'flex',flexDirection:'column',gap:24}}>
-        <div style={{textAlign:'center',paddingBottom:4}}>
-          <h1 style={{fontSize:'clamp(24px,5vw,36px)',fontWeight:800,background:'linear-gradient(135deg,#a78bfa,#6c63ff,#38bdf8)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',letterSpacing:'-1px',lineHeight:1.2,marginBottom:10}}>What can I help you build?</h1>
-          <p style={{color:'#8888aa',fontSize:14,lineHeight:1.6}}>4 AI agents collaborate — Planner · Researcher · Writer · Reviewer</p>
+        <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4,flexShrink:0}}>
+          {prov&&<div style={{fontSize:10,color:'#6c63ff',background:'rgba(108,99,255,.12)',padding:'2px 7px',borderRadius:20,fontWeight:600}}>{prov}</div>}
+          {cfg&&<div style={{fontSize:10,color:'#8888aa',maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{cfg.model}</div>}
         </div>
-        <div style={{background:'#111118',border:`1px solid ${loading?'#6c63ff55':'#2a2a3a'}`,borderRadius:16,overflow:'hidden',boxShadow:'0 4px 40px rgba(0,0,0,.4)',transition:'border-color .2s'}}>
-          <textarea value={task} onChange={e=>setTask(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey))submit();}} placeholder="Describe your task in detail... (Ctrl+Enter to run)" disabled={loading} style={{width:'100%',minHeight:110,padding:'18px 20px',background:'transparent',border:'none',outline:'none',color:'#e2e2f0',fontSize:15,resize:'none',fontFamily:'inherit',lineHeight:1.7}}/>
-          <div style={{borderTop:'1px solid #1e1e2e',padding:'12px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <div style={{display:'flex',alignItems:'center',gap:6,marginLeft:4}}>
+          {status==='running'&&<div style={{width:8,height:8,borderRadius:'50%',background:m.color,animation:'pulse 1s infinite'}}/>}
+          {status==='done'&&<div style={{width:8,height:8,borderRadius:'50%',background:'#10b981'}}/>}
+          {status==='error'&&<div style={{width:8,height:8,borderRadius:'50%',background:'#ef4444'}}/>}
+          {output&&<span style={{color:'#8888aa',fontSize:11,transform:exp?'rotate(180deg)':'none',transition:'transform .2s',display:'inline-block'}}>▼</span>}
+        </div>
+      </div>
+      {exp&&output&&(
+        <div style={{padding:'0 16px 14px',borderTop:'1px solid '+m.color+'22'}}>
+          <pre className="panel-scroll" style={{marginTop:10,fontSize:12.5,lineHeight:1.65,color:'#c8c8e8',whiteSpace:'pre-wrap',fontFamily:'inherit',maxHeight:280}}>{output}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PipelineArrow({active}){
+  return(
+    <div style={{display:'flex',justifyContent:'center',alignItems:'center',height:18}}>
+      <svg width="14" height="18" viewBox="0 0 14 18" fill="none">
+        <line x1="7" y1="0" x2="7" y2="12" stroke={active?'#6c63ff':'#2a2a3a'} strokeWidth="2"/>
+        <polygon points="2,10 12,10 7,16" fill={active?'#6c63ff':'#2a2a3a'}/>
+      </svg>
+    </div>
+  );
+}
+
+function App(){
+  const [task,setTask]=useState('');
+  const [loading,setLoading]=useState(false);
+  const [showSettings,setShowSettings]=useState(true);
+  const [agentConfigs,setAgentConfigs]=useState(makeDefaultConfigs);
+  const [globalFallback,setGlobalFallback]=useState({provider:'',apiKey:'',model:'',temperature:'0.7',maxTokens:'1024'});
+  const [agents,setAgents]=useState(()=>AGENT_ORDER.map(a=>({agent:a,status:'idle',output:'',statusMsg:''})));
+  const [finalResult,setFinalResult]=useState('');
+  const [globalError,setGlobalError]=useState('');
+  const [copied,setCopied]=useState(false);
+  const abortRef=useRef(false);
+
+  const updateCfg=useCallback((agent,key,val)=>{setAgentConfigs(prev=>({...prev,[agent]:{...prev[agent],[key]:val}}));}, []);
+  const updateFallback=useCallback((key,val)=>{setGlobalFallback(prev=>({...prev,[key]:val}));}, []);
+
+  const setAgentStatus=(name,patch)=>setAgents(prev=>prev.map(a=>a.agent===name?{...a,...patch}:a));
+
+  const resetState=()=>{
+    setAgents(AGENT_ORDER.map(a=>({agent:a,status:'idle',output:'',statusMsg:''})));
+    setFinalResult('');setGlobalError('');
+  };
+
+  const handleAbort=()=>{abortRef.current=true;setLoading(false);setAgents(prev=>prev.map(a=>a.status==='running'?{...a,status:'idle',statusMsg:''}:a));};
+
+  const runPipeline=async()=>{
+    if(!task.trim()||loading)return;
+    if(!AGENT_ORDER.some(a=>agentConfigs[a].apiKey.trim())){setGlobalError('⚠️ Configure an API key for at least one agent in Settings above.');return;}
+    setLoading(true);abortRef.current=false;resetState();
+    const outputs={};
+    try{
+      for(const name of AGENT_ORDER){
+        if(abortRef.current)break;
+        const cfg=agentConfigs[name];
+        const fallbackCfgs=globalFallback.provider&&globalFallback.apiKey?[{...globalFallback,model:globalFallback.model||PROVIDER_MODELS[globalFallback.provider]?.[0]||''}]:[];
+        let prompt='';
+        if(name==='Planner')    prompt=AGENT_PROMPTS.Planner(task);
+        if(name==='Researcher') prompt=AGENT_PROMPTS.Researcher(task,outputs['Planner']||'');
+        if(name==='Writer')     prompt=AGENT_PROMPTS.Writer(task,outputs['Researcher']||'');
+        if(name==='Reviewer')   prompt=AGENT_PROMPTS.Reviewer(outputs['Writer']||'');
+        setAgentStatus(name,{status:'running',statusMsg:'Starting...'});
+        try{
+          const result=await generateWithRetry({cfg,prompt,fallbackCfgs,maxRetries:3,onStatus:msg=>setAgentStatus(name,{statusMsg:msg})});
+          outputs[name]=result;
+          setAgentStatus(name,{status:'done',output:result,statusMsg:''});
+        }catch(err){
+          setAgentStatus(name,{status:'error',statusMsg:err.message});
+          setGlobalError('Agent '+name+' failed: '+err.message);
+          break;
+        }
+      }
+      if(!abortRef.current&&outputs['Reviewer'])setFinalResult(outputs['Reviewer']);
+    }finally{setLoading(false);}
+  };
+
+  const copy=()=>{navigator.clipboard.writeText(finalResult);setCopied(true);setTimeout(()=>setCopied(false),2000);};
+  const anyStarted=agents.some(a=>a.status!=='idle');
+  const doneCount=agents.filter(a=>a.status==='done').length;
+  const activeIdx=agents.findIndex(a=>a.status==='running');
+
+  const iS={width:'100%',padding:'8px 10px',background:'#0e0e16',border:'1px solid #2a2a3a',borderRadius:8,color:'#e2e2f0',fontSize:13,outline:'none',fontFamily:'inherit'};
+
+  return(
+    <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',background:'#0a0a0f'}}>
+      <header style={{borderBottom:'1px solid #1e1e2e',padding:'14px 24px',display:'flex',alignItems:'center',justifyContent:'space-between',backdropFilter:'blur(10px)',position:'sticky',top:0,zIndex:20,background:'rgba(10,10,15,0.94)'}}>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <div style={{width:36,height:36,borderRadius:10,background:'linear-gradient(135deg,#6c63ff,#a78bfa)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:18,boxShadow:'0 0 20px rgba(108,99,255,.4)'}}>🤖</div>
+          <div>
+            <div style={{fontWeight:700,fontSize:15,color:'#e2e2f0',letterSpacing:'-.3px'}}>AI Agent System</div>
+            <div style={{fontSize:11,color:'#6c63ff',fontWeight:500}}>Frontend-only · Multi-Provider · Modular Adapters</div>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <button onClick={()=>setShowSettings(s=>!s)} style={{padding:'6px 14px',background:showSettings?'rgba(108,99,255,.2)':'transparent',border:'1px solid '+(showSettings?'#6c63ff55':'#2a2a3a'),borderRadius:8,color:showSettings?'#a78bfa':'#8888aa',cursor:'pointer',fontSize:12,fontWeight:600,transition:'all .2s'}}>
+            {showSettings?'⚙️ Settings':'⚙️ Settings'}
+          </button>
+          <a href="https://github.com/Z200-WEB/ai-task-manager" target="_blank" style={{padding:'6px 12px',background:'transparent',border:'1px solid #2a2a3a',borderRadius:8,color:'#8888aa',textDecoration:'none',fontSize:12}}>GitHub ↗</a>
+        </div>
+      </header>
+
+      <main style={{flex:1,maxWidth:900,width:'100%',margin:'0 auto',padding:'28px 20px',display:'flex',flexDirection:'column',gap:22}}>
+
+        <div style={{textAlign:'center',paddingBottom:4}}>
+          <h1 style={{fontSize:'clamp(22px,4.5vw,34px)',fontWeight:800,background:'linear-gradient(135deg,#a78bfa,#6c63ff,#38bdf8)',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',letterSpacing:'-1px',lineHeight:1.2,marginBottom:8}}>
+            What can I help you build?
+          </h1>
+          <p style={{color:'#8888aa',fontSize:13,lineHeight:1.6}}>
+            4 AI agents collaborate — <strong style={{color:'#6c63ff'}}>Planner</strong> · <strong style={{color:'#06b6d4'}}>Researcher</strong> · <strong style={{color:'#f59e0b'}}>Writer</strong> · <strong style={{color:'#10b981'}}>Reviewer</strong>
+          </p>
+          <p style={{color:'#555570',fontSize:12,marginTop:4}}>Each agent can use a different provider · Retry + auto-fallback built-in · Zero backend</p>
+        </div>
+
+        {showSettings&&(
+          <SettingsPanel agentConfigs={agentConfigs} onUpdate={updateCfg} globalFallback={globalFallback} onFallbackUpdate={updateFallback}/>
+        )}
+
+        <div style={{background:'#111118',border:'1px solid '+(loading?'#6c63ff55':'#2a2a3a'),borderRadius:16,overflow:'hidden',boxShadow:'0 4px 40px rgba(0,0,0,.4)',transition:'border-color .2s'}}>
+          <textarea value={task} onChange={e=>setTask(e.target.value)} onKeyDown={e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter')runPipeline();}} placeholder="Describe your task in detail... (Ctrl+Enter to run)" disabled={loading} style={{width:'100%',minHeight:100,padding:'18px 20px',background:'transparent',border:'none',outline:'none',color:'#e2e2f0',fontSize:15,resize:'none',fontFamily:'inherit',lineHeight:1.7}}/>
+          <div style={{borderTop:'1px solid #1e1e2e',padding:'10px 16px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
             <span style={{fontSize:11,color:'#555570'}}>{task.length} chars · Ctrl+Enter to run</span>
             <div style={{display:'flex',gap:8}}>
-              {loading&&<button onClick={()=>{abortRef.current?.abort();setLoading(false);}} style={{padding:'8px 14px',background:'rgba(239,68,68,.15)',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,color:'#ef4444',cursor:'pointer',fontSize:13,fontWeight:500}}>⏹ Stop</button>}
-              <button onClick={submit} disabled={!task.trim()||loading} style={{padding:'9px 22px',background:task.trim()&&!loading?'linear-gradient(135deg,#6c63ff,#a78bfa)':'#2a2a3a',border:'none',borderRadius:8,color:task.trim()&&!loading?'#fff':'#555570',cursor:task.trim()&&!loading?'pointer':'not-allowed',fontSize:14,fontWeight:600,transition:'all .2s',boxShadow:task.trim()&&!loading?'0 4px 20px rgba(108,99,255,.35)':'none'}}>{loading?'⚙️ Running...':'▶ Run Task'}</button>
+              {loading&&<button onClick={handleAbort} style={{padding:'7px 14px',background:'rgba(239,68,68,.15)',border:'1px solid rgba(239,68,68,.3)',borderRadius:8,color:'#ef4444',cursor:'pointer',fontSize:13,fontWeight:500}}>⏹ Stop</button>}
+              <button onClick={runPipeline} disabled={!task.trim()||loading} style={{padding:'8px 22px',background:task.trim()&&!loading?'linear-gradient(135deg,#6c63ff,#a78bfa)':'#2a2a3a',border:'none',borderRadius:8,color:task.trim()&&!loading?'#fff':'#555570',cursor:task.trim()&&!loading?'pointer':'not-allowed',fontSize:14,fontWeight:600,transition:'all .2s',boxShadow:task.trim()&&!loading?'0 4px 20px rgba(108,99,255,.35)':'none'}}>
+                {loading?'⚙️ Running...':'▶ Run Task'}
+              </button>
             </div>
           </div>
         </div>
-        {!started&&!result&&(
+
+        {!anyStarted&&!finalResult&&(
           <div style={{animation:'fadeIn .5s ease'}}>
             <div style={{fontSize:11,color:'#555570',marginBottom:10,textTransform:'uppercase',letterSpacing:'.1em',fontWeight:600}}>Try an example</div>
             <div style={{display:'flex',flexWrap:'wrap',gap:8}}>
-              {ex.map((e,i)=>(
-                <button key={i} onClick={()=>setTask(e)} style={{padding:'7px 14px',background:'#1a1a24',border:'1px solid #2a2a3a',borderRadius:20,color:'#a0a0c0',cursor:'pointer',fontSize:13,transition:'all .2s'}}
-                  onMouseEnter={ev=>{ev.target.style.background='#2a2a3a';ev.target.style.color='#e2e2f0';}}
-                  onMouseLeave={ev=>{ev.target.style.background='#1a1a24';ev.target.style.color='#a0a0c0';}}>{e}</button>
+              {['Write a marketing strategy for a SaaS product','Create a 30-day fitness plan for beginners','Build a roadmap for a restaurant business','Design a REST API for an e-commerce platform','Plan a machine learning project from scratch'].map((e,i)=>(
+                <button key={i} onClick={()=>setTask(e)} style={{padding:'6px 14px',background:'#1a1a24',border:'1px solid #2a2a3a',borderRadius:20,color:'#a0a0c0',cursor:'pointer',fontSize:13,transition:'all .2s'}} onMouseEnter={ev=>{ev.target.style.background='#2a2a3a';ev.target.style.color='#e2e2f0'}} onMouseLeave={ev=>{ev.target.style.background='#1a1a24';ev.target.style.color='#a0a0c0'}}>{e}</button>
               ))}
             </div>
           </div>
         )}
-        {error&&<div style={{animation:'fadeIn .3s ease',padding:'14px 16px',background:'rgba(239,68,68,.1)',border:'1px solid rgba(239,68,68,.3)',borderRadius:10,color:'#fca5a5',fontSize:13}}>⚠️ {error}</div>}
-        {started&&(
+
+        {globalError&&(
+          <div style={{animation:'fadeIn .3s ease',padding:'12px 16px',background:'rgba(239,68,68,.1)',border:'1px solid rgba(239,68,68,.3)',borderRadius:10,color:'#fca5a5',fontSize:13,wordBreak:'break-all'}}>
+            {globalError}
+          </div>
+        )}
+
+        {anyStarted&&(
           <div style={{animation:'fadeIn .4s ease'}}>
-            <div style={{fontSize:11,color:'#555570',marginBottom:12,textTransform:'uppercase',letterSpacing:'.1em',fontWeight:600}}>Agent Pipeline</div>
-            <div style={{display:'flex',flexDirection:'column',gap:8}}>
-              {agents.map((a,i)=><AgentCard key={a.agent} {...a} index={i}/>)}
+            <div style={{fontSize:11,color:'#555570',marginBottom:10,textTransform:'uppercase',letterSpacing:'.1em',fontWeight:600,display:'flex',justifyContent:'space-between'}}>
+              <span>Agent Pipeline</span>
+              {loading&&<span style={{color:'#6c63ff',animation:'pulse 1s infinite'}}>{doneCount}/4 complete</span>}
+            </div>
+            <div style={{display:'flex',flexDirection:'column',gap:0}}>
+              {agents.map((a,i)=>(
+                <div key={a.agent}>
+                  <AgentCard {...a} index={i} cfg={agentConfigs[a.agent]}/>
+                  {i<agents.length-1&&<PipelineArrow active={i<activeIdx||(activeIdx===-1&&agents[i].status==='done')}/>}
+                </div>
+              ))}
             </div>
           </div>
         )}
-        {result&&(
+
+        {finalResult&&(
           <div style={{animation:'fadeIn .4s ease',border:'1px solid rgba(108,99,255,.4)',borderRadius:12,background:'rgba(108,99,255,.06)',padding:20}}>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
               <div style={{fontSize:14,fontWeight:700,color:'#a78bfa'}}>✨ Final Result</div>
               <button onClick={copy} style={{padding:'5px 12px',background:'rgba(108,99,255,.2)',border:'1px solid rgba(108,99,255,.4)',borderRadius:7,color:'#a78bfa',cursor:'pointer',fontSize:12,fontWeight:500}}>{copied?'✓ Copied!':'📋 Copy'}</button>
             </div>
-            <div style={{fontSize:13.5,lineHeight:1.75,color:'#d0d0f0',whiteSpace:'pre-wrap',fontFamily:'inherit',maxHeight:420,overflowY:'auto'}}>{result}</div>
+            <div className="panel-scroll" style={{fontSize:13.5,lineHeight:1.75,color:'#d0d0f0',whiteSpace:'pre-wrap',fontFamily:'inherit',maxHeight:500}}>{finalResult}</div>
           </div>
         )}
+
       </main>
-      <footer style={{borderTop:'1px solid #1e1e2e',padding:'14px 24px',textAlign:'center',fontSize:12,color:'#555570'}}>
-        AI Task Manager · Powered by Gemini Pro + LangGraph
+
+      <footer style={{borderTop:'1px solid #1e1e2e',padding:'12px 24px',textAlign:'center',fontSize:12,color:'#555570'}}>
+        AI Agent System · Frontend-only · OpenAI · Claude · Gemini · Custom API · No backend required
       </footer>
     </div>
   );
